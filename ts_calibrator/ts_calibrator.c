@@ -111,6 +111,9 @@ static void get_input(int *px, int *py)
     int rd, i;
     struct input_event ev[64];
     int step = 0;
+    int num_x = 0 ;
+    int num_y = 0 ;
+    *px = *py = 0 ;
 
     while (1) {
 
@@ -127,18 +130,25 @@ static void get_input(int *px, int *py)
 	    switch (ev[i].type) {
 
 	    case EV_SYN:
-		if (step)
+		if (step) {
+		    *px /= num_x ;
+		    *py /= num_y ;
 		    return;
+		}
 	    case EV_KEY:
-		if (ev[i].code == BTN_TOUCH && ev[i].value == 0)
+		if (ev[i].code == BTN_TOUCH && ev[i].value == 0 && (0 < num_x) && (0 < num_y))
 		    /* get the final touch */
 		    step = 1;
 		break;
 	    case EV_ABS:
-		if (ev[i].code == REL_X)
-		    *px = ev[i].value;
-		else if (ev[i].code == REL_Y)
-		    *py = ev[i].value;
+		if (ev[i].code == REL_X) {
+		    *px += ev[i].value;
+		    num_x++ ;
+		}
+		else if (ev[i].code == REL_Y) {
+		    *py += ev[i].value;
+		    num_y++ ;
+		}
 		break;
 	    default:
 		break;
@@ -146,7 +156,6 @@ static void get_input(int *px, int *py)
 	}
 
     }
-
 }
 
 #define LINE_LEN 16
