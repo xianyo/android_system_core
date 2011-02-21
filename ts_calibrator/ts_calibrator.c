@@ -29,7 +29,10 @@
 #include <linux/input.h>
 #include <sys/mman.h>
 #include <cutils/properties.h>
+#include "five_wire_calib.h"
+#include <sys/poll.h>
 
+#define ARRAY_SIZE(__arr) (sizeof(__arr)/sizeof(__arr[0]))
 #define LOG_BUF_MAX 512
 
 #ifndef TS_DEVICE
@@ -48,7 +51,8 @@ static const char dev_name[] = TS_INPUT_DEV;
 static int log_fd;
 static struct fb_var_screeninfo info;
 static void *scrbuf;
-static int fb_fd, ts_fd, cf_fd;
+static unsigned scrsize ;
+static int fb_fd, ts_fd, cf_fd, tty_fd ;
 static int cal_val[7];
 
 static void log_write(const char *fmt, ...)
@@ -87,6 +91,23 @@ static void write_conf(int *data)
     close(fd);
 }
 
+static void no_conf(void)
+{
+    char param_path[256];
+    char buf[] = {"0,0,0,0,0,0,0"};
+    int fd ;
+
+    sprintf(param_path,
+	    "/sys/module/%s/parameters/calibration", dev_name);
+    fd = open(param_path, O_WRONLY);
+    if (fd < 0) {
+	log_write("no_conf() error, can not write driver parameters\n");
+	return;
+    }
+    write(fd, buf, strlen(buf));
+    close(fd);
+}
+
 static void save_conf(int *data)
 {
     char buf[200];
@@ -106,200 +127,448 @@ static void save_conf(int *data)
     close(cf_fd);
 }
 
+#define CSI "\x1b["
+#define NOCURSOR CSI "?25l"
+#define CLEARSCREEN CSI "2J"
+
+static void tty_gotoxy(unsigned x, unsigned y){
+	if (0 <= tty_fd) {
+		char buf[80];
+		int len = snprintf(buf,sizeof(buf), CSI "%u;%uH", y, x );
+		write(tty_fd,buf,len);
+	}
+}
+
+static void tty_write(unsigned x, unsigned y, const char *fmt, ...)
+{
+	if (0 <= tty_fd) {
+		char buf[LOG_BUF_MAX];
+		va_list ap;
+		int len ;
+
+		tty_gotoxy(x,y);
+		va_start(ap, fmt);
+		len = vsnprintf(buf, LOG_BUF_MAX, fmt, ap);
+		buf[LOG_BUF_MAX - 1] = 0;
+		va_end(ap);
+		write(tty_fd, buf, len);
+	}
+}
+
+static void set_title(char const *title){
+	tty_write(10,12,title);
+}
+
+static void set_subtitle(char const *title){
+	tty_write(10,13,title);
+}
+
+/* returns number read */
+static int read_input(int timeout_ms, struct input_event *event, int max)
+{
+	struct pollfd fds ;
+	fds.fd = ts_fd ;
+	fds.events = POLLIN|POLLERR ;
+	if (1 == poll(&fds,1,timeout_ms)) {
+		int nread = read(ts_fd,event,sizeof(*event)*max);
+		return nread/sizeof(*event);
+	}
+
+	return 0 ;
+}
+
+static void flush_input(void)
+{
+	struct input_event ev[64];
+	int num_read ;
+	/* read ts input */
+	while (0 < (num_read = read_input(100,ev,ARRAY_SIZE(ev)))) {
+	}
+}
+
 static void get_input(int *px, int *py)
 {
-    int rd, i;
-    struct input_event ev[64];
     int step = 0;
     int num_x = 0 ;
     int num_y = 0 ;
     *px = *py = 0 ;
 
     while (1) {
-
+	struct input_event ev[64];
+	int num_read ;
 	/* read ts input */
-	rd = read(ts_fd, ev, sizeof(struct input_event) * 64);
+	if (0 < (num_read = read_input(-1,ev,ARRAY_SIZE(ev)))) {
+		int i ;
+		for (i = 0; i < num_read ; i++) {
+		    switch (ev[i].type) {
 
-	if (rd < (int) sizeof(struct input_event)) {
-	    log_write("Read input error\n");
-	    continue;
+		    case EV_SYN:
+			if (step) {
+			    *px /= num_x ;
+			    *py /= num_y ;
+			    return;
+			}
+			break;
+		    case EV_KEY:
+			if (ev[i].code == BTN_TOUCH && ev[i].value == 0 && (0 < num_x) && (0 < num_y))
+			    /* get the final touch */
+			    step = 1;
+			break;
+		    case EV_ABS:
+			if (ev[i].code == REL_X) {
+			    tty_write(1,2,"%4u",ev[i].value);
+			    if (256 < num_x) {
+				    *px /= 2 ;
+				    num_x /= 2 ;
+			    }
+			    *px += ev[i].value;
+			    num_x++ ;
+			}
+			else if (ev[i].code == REL_Y) {
+			    tty_write(6,2,"%4u",ev[i].value);
+			    if (256 < num_y) {
+				    *py /= 2 ;
+				    num_y /= 2 ;
+			    }
+			    *py += ev[i].value;
+			    num_y++ ;
+			}
+			break;
+		    default:
+			break;
+		    }
+		}
 	}
+    }
+}
 
-	for (i = 0; i < (int)(rd / sizeof(struct input_event)); i++) {
+#define TO565(r,g,b) \
+    ((((r) >> 3) << 11) | (((g) >> 2) << 5) | ((b) >> 3))
 
-	    switch (ev[i].type) {
+#define WHITE 0xffffff
+#define BLACK 0
+#define RED(rgb24) ((rgb24&0xff0000)>>16)
+#define GREEN(rgb24) ((rgb24&0x00ff00)>>8)
+#define BLUE(rgb24) (rgb24&0xff)
+#define RGB16(rgb24) TO565(RED(rgb24),GREEN(rgb24),BLUE(rgb24))
 
-	    case EV_SYN:
-		if (step) {
-		    *px /= num_x ;
-		    *py /= num_y ;
-		    return;
-		}
-	    case EV_KEY:
-		if (ev[i].code == BTN_TOUCH && ev[i].value == 0 && (0 < num_x) && (0 < num_y))
-		    /* get the final touch */
-		    step = 1;
-		break;
-	    case EV_ABS:
-		if (ev[i].code == REL_X) {
-		    *px += ev[i].value;
-		    num_x++ ;
-		}
-		else if (ev[i].code == REL_Y) {
-		    *py += ev[i].value;
-		    num_y++ ;
-		}
-		break;
-	    default:
-		break;
+static void draw_line(int x1, int x2, int y1, int y2, unsigned color)
+{
+    int px_byte = info.bits_per_pixel / 8;
+    int start ;
+    int i;
+    __u16 *buf16;
+    __u32 *buf32;
+
+    if (x1 > x2) {
+	    int tmp = x1 ; x1 = x2 ; x2 = tmp ;
+    }
+
+    if (y1 > y2) {
+	    int tmp = y1 ; y1 = y2 ; y2 = tmp ;
+    }
+
+    if (0 > x1) x1 = 0 ;
+    if (0 > y1) y1 = 0 ;
+    if (info.xres <= (unsigned)x2) x2 = info.xres-1 ;
+    if (info.yres <= (unsigned)y2) y2 = info.yres-1 ;
+
+    start = (x1 + y1*info.xres) * px_byte;
+    if (16 == info.bits_per_pixel)
+	    color = RGB16(color);
+
+    if (x1 == x2) {
+            /* vertical line */
+	    __u8 *buf = (__u8 *)scrbuf + start ;
+	    int y ;
+	    for (y = y1 ; y < y2 ; y++) {
+		    memcpy(buf,&color,px_byte); /* only works little-endian */
+		    buf += info.xres*px_byte ;
 	    }
-	}
-
+    } else if (y1 == y2) {
+            /* horizontal line */
+	    __u8 *buf = (__u8 *)scrbuf + start ;
+	    int x ;
+	    for (x = x1 ; x < x2 ; x++) {
+		    memcpy(buf,&color,px_byte); /* only works little-endian */
+		    buf += px_byte ;
+	    }
+    } else {
+	    /* No diagonals */
+	    log_write("No support for diagonal lines: %u..%u %u..%u\n", x1, x2, y1, y2);
     }
 }
 
 #define LINE_LEN 16
-static void draw_cross(int x, int y, int clear)
+static void draw_cross(int x, int y, int color)
 {
-    int px_byte = info.bits_per_pixel / 8;
-    int h_start, v_start;
-    int i;
-    __u32 pixel = ~(0U);
-    __u8 *buf = scrbuf;
-    __u16 *buf16;
-    __u32 *buf32;
-
-    if (clear)
-	pixel = 0;
-
-    h_start = (x + y*info.xres - LINE_LEN/2) * px_byte;
-    v_start = (x + (y - LINE_LEN/2)*info.xres) * px_byte;
-
-    switch (info.bits_per_pixel) {
-
-    case 16:
-	buf16 = (__u16*)((__u8*)scrbuf + h_start);
-	for (i = 0; i <= LINE_LEN; i ++)
-	    *buf16++ = (__u16)pixel;
-	buf16 = (__u16*)((__u8*)scrbuf + v_start);
-	for (i = 0; i <= LINE_LEN; i ++) {
-	    *buf16 = (__u16)pixel;
-	    buf16 += info.xres;
-	}
-	break;
-    case 24:
-	buf += h_start;
-	for (i = 0; i <= LINE_LEN; i ++) {
-	    *buf++ = *((__u8*)pixel + 2);
-	    *buf++ = *((__u8*)pixel + 1);
-	    *buf++ = *(__u8*)pixel;
-	}
-	buf = (__u8*)scrbuf + v_start;
-	for (i = 0; i <= LINE_LEN; i ++) {
-	    *buf++ = *((__u8*)pixel + 2);
-	    *buf++ = *((__u8*)pixel + 1);
-	    *buf = *(__u8*)pixel;
-	    buf += info.xres * px_byte - 2;
-	}
-	break;
-    case 32:
-	buf32 = (__u32*)((__u8*)scrbuf + h_start);
-	pixel &= (((1 << info.transp.length) - 1) << info.transp.offset);
-	for (i = 0; i <= LINE_LEN; i ++)
-	    *buf32++ = pixel;
-	buf32 = (__u32*)((__u8*)scrbuf + v_start);
-	for (i = 0; i <= LINE_LEN; i ++) {
-	    *buf32 = pixel;
-	    buf32 += info.xres;
-	}
-	break;
-    default:
-	break;
-    }
-
+    draw_line(x-(LINE_LEN/2),x+(LINE_LEN/2),y,y,color);
+    draw_line(x,x,y-(LINE_LEN/2),y+(LINE_LEN/2),color);
 }
 
-static void do_calibration(void)
+static void do_calibration(int xmin, int xmax, int ymin, int ymax)
 {
-    int i, x, y;
-    int dx[3], dy[3];
-    int tx[3], ty[3];
-    int delta, delta_x[3], delta_y[3];
+    struct calibrate_point_t points[3];
+    int i ;
+    int xrange = xmax-xmin;
+    int yrange = ymax-ymin;
 
-    /* calculate the expected point */
-    x = info.xres / 4;
-    y = info.yres / 4;
+    memset(scrbuf, 0, scrsize);
 
-    dx[0] = x;
-    dy[0] = info.yres / 2;
-    dx[1] = info.xres / 2;
-    dy[1] = y;
-    dx[2] = info.xres - x;
-    dy[2] = info.yres - y;
+    /* print information on screen */
+    tty_write(1,1,CLEARSCREEN NOCURSOR);
+    set_title("Touchscreen Calibration");
+
+    flush_input();
+
+    points[0].x = info.xres / 4;
+    points[0].y = info.yres / 2;
+    points[1].x = info.xres / 2;
+    points[1].y = info.yres / 4;
+    points[2].x = (3 * info.xres) / 4;
+    points[2].y = (3 * info.yres) / 4;
+
+    no_conf();
 
 retry:
-
     for (i = 0; i < 3; i ++) {
-	draw_cross(dx[i], dy[i], 0);
-	get_input(&tx[i], &ty[i]);
-	log_write("get event: %d,%d -> %d,%d\n",
-			tx[i], ty[i], dx[i], dy[i]);
-	draw_cross(dx[i], dy[i], 1);
+        struct calibrate_point_t *pt = points+i ;
+	flush_input(); /* in case we're bouncing */
+	draw_cross(pt->x, pt->y, WHITE);
+        tty_write(1,1,"%4u:%4u",pt->x,pt->y);
+	get_input(&pt->i, &pt->j);
+	draw_cross(pt->x, pt->y, BLACK);
+        points[i].x = (points[i].x*xrange)/info.xres ;
+        points[i].y = (points[i].y*yrange)/info.yres ;
     }
-
-    /* check ok, calulate the result */
-    delta = (tx[0] - tx[2]) * (ty[1] - ty[2])
-                - (tx[1] - tx[2]) * (ty[0] - ty[2]);
-    delta_x[0] = (dx[0] - dx[2]) * (ty[1] - ty[2])
-                - (dx[1] - dx[2]) * (ty[0] - ty[2]);
-    delta_x[1] = (tx[0] - tx[2]) * (dx[1] - dx[2])
-                - (tx[1] - tx[2]) * (dx[0] - dx[2]);
-    delta_x[2] = dx[0] * (tx[1] * ty[2] - tx[2] * ty[1]) -
-                dx[1] * (tx[0] * ty[2] - tx[2] * ty[0]) +
-                dx[2] * (tx[0] * ty[1] - tx[1] * ty[0]);
-    delta_y[0] = (dy[0] - dy[2]) * (ty[1] - ty[2])
-                - (dy[1] - dy[2]) * (ty[0] - ty[2]);
-    delta_y[1] = (tx[0] - tx[2]) * (dy[1] - dy[2])
-                - (tx[1] - tx[2]) * (dy[0] - dy[2]);
-    delta_y[2] = dy[0] * (tx[1] * ty[2] - tx[2] * ty[1]) -
-                dy[1] * (tx[0] * ty[2] - tx[2] * ty[0]) +
-                dy[2] * (tx[0] * ty[1] - tx[1] * ty[0]);
-
-    cal_val[0] = delta_x[0];
-    cal_val[1] = delta_x[1];
-    cal_val[2] = delta_x[2];
-    cal_val[3] = delta_y[0];
-    cal_val[4] = delta_y[1];
-    cal_val[5] = delta_y[2];
-    cal_val[6] = delta;
-
-    save_conf(cal_val);
-    write_conf(cal_val);
+	
+    if (five_wire_calibrate(points,cal_val)) {
+	    log_write("calibration: %u:%u.%d.%d %u:%u.%d.%d %u:%u.%d.%d %u %u\n"
+		      , points[0].x, points[0].y, points[0].i, points[0].j
+		      , points[1].x, points[1].y, points[1].i, points[1].j
+		      , points[2].x, points[2].y, points[2].i, points[2].j
+		      , info.xres, info.yres );
+	    save_conf(cal_val);
+	    write_conf(cal_val);
+    } else {
+	    log_write( "calibration failure\n" );
+	    goto retry ;
+    }
 }
 
-static void test_calibration(void)
+static void draw_box(unsigned x1, unsigned y1, unsigned x2, unsigned y2,unsigned color)
 {
-    int sample[3][2] = {
-	{ 200, 200 },
-	{ 100, 400 },
-	{ 600, 330 },
-    };
-    int tx[3];
-    int ty[3];
-    int i, x, y;
+	unsigned y ;
+	for (y = y1 ; y < y2 ; y++) {
+		draw_line(x1,x2,y,y,color);
+	}
+}
 
-    for (i = 0; i < 3; i ++) {
-	draw_cross(sample[i][0], sample[i][1], 0);
-	get_input(&tx[i], &ty[i]);
-	x = (cal_val[0] * tx[i]) +
-		(cal_val[1] * ty[i]) +
-		cal_val[2];
-	y = (cal_val[3] * tx[i]) +
-		(cal_val[4] * ty[i]) +
-		cal_val[5];
-	log_write("get event: %d,%d\n", x/cal_val[6], y/cal_val[6]);
-	draw_cross(sample[i][0], sample[i][1], 1);
-    }
+static int point_in_rect
+	(unsigned x
+	,unsigned y
+	,unsigned left
+	,unsigned top
+	,unsigned right
+	,unsigned bottom)
+{
+	return (x >= left) && (x <= right) && (y >= top) && (y <= bottom);
+}
+
+struct test_sample_t {
+	unsigned x ;
+	unsigned y ;
+	unsigned num_i ;
+	unsigned num_j ;
+	int avg_i ;
+	int avg_j ;
+	int min_i ;
+	int min_j ;
+	int max_i ;
+	int max_j ;
+};
+
+int read_sample(struct test_sample_t *samp)
+{
+	samp->num_i =
+	samp->num_j =
+	samp->avg_i = 
+        samp->avg_j = 0 ;
+	samp->min_i = 
+	samp->min_j = 0x7fffffff ;
+	samp->max_i = 
+	samp->max_j = 0x80000000 ;
+
+	struct input_event ev[64];
+	int num_read ;
+	int released = 0 ;
+
+	while (0 < (num_read = read_input(5000,ev,ARRAY_SIZE(ev)))) {
+		int i ;
+		for (i = 0; i < num_read ; i++) {
+		    switch (ev[i].type) {
+		    case EV_SYN:
+			if (released) {
+			    if ((0 < samp->num_i) && (0 < samp->num_i)){
+				    samp->avg_i /= samp->num_i ;
+				    samp->avg_j /= samp->num_j ;
+				    return 1 ;
+			    } else {
+				    log_write ("No samples before release\n");
+				    released = 0 ;
+			    }
+			}
+			break;
+		    case EV_KEY:
+			if (ev[i].code == BTN_TOUCH)
+                                released = (ev[i].value == 0);
+			break;
+		    case EV_ABS: {
+			int value = ev[i].value ;
+			if (ev[i].code == REL_X) {
+			    if (256 < samp->num_i) {
+				    samp->avg_i /= 2 ;
+				    samp->num_i /= 2 ;
+			    }
+			    samp->avg_i += value;
+			    if (value > samp->max_i)
+				    samp->max_i = value ;
+			    if (value < samp->min_i)
+				    samp->min_i = value ;
+			    samp->num_i++ ;
+			}
+			else if (ev[i].code == REL_Y) {
+			    if (256 < samp->num_j) {
+				    samp->avg_j /= 2 ;
+				    samp->num_j /= 2 ;
+			    }
+			    samp->avg_j += value;
+			    if (value > samp->max_j)
+				    samp->max_j = value ;
+			    if (value < samp->min_j)
+				    samp->min_j = value ;
+			    samp->num_j++ ;
+			}
+			break;
+		    }
+		    default:
+			break;
+		    }
+		}
+	}
+	log_write ("timeout waiting for release\n");
+	return 0 ;
+}
+
+void test_64_points (void) {
+	unsigned xincr = info.xres / 9 ;
+	unsigned yincr = info.yres / 9 ;
+	unsigned y,ypos=yincr ;
+	unsigned i = 0 ;
+        struct test_sample_t *samples = (struct test_sample_t *)malloc(64*sizeof(struct test_sample_t));
+	memset(scrbuf, 0, scrsize);
+        no_conf();
+    	for (y = 0 ; y < 8 ; y++,ypos+=yincr) {
+                unsigned x, xpos=xincr;
+		for (x = 0 ; x < 8 ; x++,xpos+=xincr) {
+			int got_sample ;
+                        struct test_sample_t *s = samples+i ;
+			s->x = xpos ;
+			s->y = ypos ;
+			flush_input();
+			draw_cross(xpos,ypos,WHITE);
+			got_sample = read_sample(s);
+			draw_cross(xpos,ypos,BLACK);
+			if(!got_sample)
+				break;
+			i++ ;
+		}
+		if (x < 8)
+			break;
+	}
+	if (64 == i) {
+		log_write("64-point calibration:\n");
+		for (i = 0; i<64; i++) {
+			struct test_sample_t *s = samples+i;
+			log_write("%u\t%u\t%u\t%u\t%d\t%d\t%d\t%d\t%d\t%d\n",
+				  s->x,s->y,
+				  s->num_i,s->num_j,
+				  s->avg_i,s->avg_j,
+				  s->min_i,s->min_j,
+				  s->max_i,s->max_j);
+		}
+	} else {
+		log_write("64-point calibration abandoned after %u points\n", i);
+	}
+	free(samples);
+}
+
+static int test_calibration(int xmin,int xmax,int ymin,int ymax)
+{
+	int num_read ;
+	struct input_event ev[64];
+	int last_x = -1 ;
+	int last_y = -1 ;
+	int released = 0 ;
+	int const button_size = (16*info.xres)/640 ;
+	int const xrange = xmax-xmin ;
+	int const yrange = ymax-ymin ;
+	int const confirm_left = (info.xres/4)-button_size ;
+	int const confirm_right = confirm_left + button_size ;
+	int const confirm_top = (info.yres/2)-button_size ;
+	int const confirm_bottom = confirm_top + button_size ;
+    
+	int const test_left = 3*(info.xres/4)-button_size ;
+	int const test_right = test_left+button_size ;
+	int const test_top = confirm_top ;
+	int const test_bottom = confirm_bottom ;
+
+	tty_write(1,1,CLEARSCREEN NOCURSOR);
+	set_title("Touch green box to confirm");
+	set_title("Touch red box to run 64-point test");
+	draw_box(confirm_left,confirm_top,confirm_right,confirm_bottom,0x00D000);
+	draw_box(test_left,test_top,test_right,test_bottom,0xD00000);
+
+	last_y = 0 ;
+	
+	while (0 < (num_read = read_input(5000, ev,ARRAY_SIZE(ev)))) {
+		int i ;
+		for (i = 0; i < num_read ; i++) {
+		    switch (ev[i].type) {
+		    case EV_SYN:
+			if (released) {
+				if (point_in_rect(last_x,last_y,confirm_left,confirm_top,confirm_right,confirm_bottom)) {
+					log_write ("Calibration settings confirmed @%u:%u\n", last_x, last_y);
+					return 1 ;
+				} else if (point_in_rect(last_x,last_y,test_left,test_top,test_right,test_bottom)) {
+					test_64_points();
+					return 0 ;
+				} else {
+					draw_cross(last_x,last_y,0x0000FF);
+				}
+			} else {
+				draw_cross(last_x,last_y,0x808080);
+			}
+		    case EV_KEY:
+			released = (ev[i].code == BTN_TOUCH && ev[i].value == 0);
+			draw_cross(last_x,last_y, released ? 0x808000 : 0x8080FF);
+			break;
+		    case EV_ABS:
+			if (ev[i].code == REL_X) {
+			    tty_write(1,2,"%4u",ev[i].value);
+			    last_x = (ev[i].value*info.xres)/xrange ;
+			}
+			else if (ev[i].code == REL_Y) {
+			    tty_write(6,2,"%4u",ev[i].value);
+			    last_y = (ev[i].value*info.yres)/yrange ;
+			}
+			break;
+		    default:
+			break;
+		    }
+		}
+	}
+	return 0 ;
 }
 
 static int check_conf(void)
@@ -337,17 +606,22 @@ static int check_conf(void)
 
 int main(int argc, char **argv)
 {
+    struct input_absinfo abs_x ;
+    struct input_absinfo abs_y ;
+
     struct fb_fix_screeninfo finfo;
     struct stat s;
-    int i;
-    char runme[PROPERTY_VALUE_MAX];
+    int i, rv;
 
-    property_get("ro.calibration", runme, "");
-    if (runme[0] != '1')
-	return 0;
+    if (!isatty(0)) {
+	    char runme[PROPERTY_VALUE_MAX];
+	    property_get("ro.calibration", runme, "");
+	    if (runme[0] != '1')
+		return 0;
+    }
 
     /* open log */
-    log_fd = open(log, O_WRONLY | O_CREAT | O_TRUNC);
+    log_fd = isatty(1) ? 1 : open(log, O_WRONLY | O_CREAT | O_TRUNC);
 
     if (check_conf())
 	goto err_log;
@@ -376,39 +650,13 @@ int main(int argc, char **argv)
 	log_write("Failed to map screen\n");
 	goto err_fb;
     }
-
-    memset(scrbuf, 0, finfo.smem_len);
-
-    /* print information on screen */
-    fb_fd = open("/dev/tty0", O_RDWR);
-    if (fb_fd >= 0) {
-        const char *msg = "\n"
-        "\n"
-        "\n"  // console is 40 cols x 30 lines
-        "\n"
-        "\n"
-        "\n"
-        "\n"
-        "\n"
-        "\n"
-        "\n"
-        "\n"
-        "\n"
-        "\t\tTouchscreen Calibration";
-	char esc = 27;
-	char clear[10];
-	sprintf(clear, "%c[2J", esc);
-        write(fb_fd, clear, strlen(clear));
-	sprintf(clear, "%c[1;1H", esc);
-        write(fb_fd, clear, strlen(clear));
-        write(fb_fd, msg, strlen(msg));
-        close(fb_fd);
-    }
+    scrsize = finfo.smem_len ;
 
     for (i = 0; ; i++) {
 	/* open touchscreen input dev */
 	char ts_dev[256];
 	char name[256] = "Unknow";
+
 	sprintf(ts_dev, "%s%d", input_dev, i);
 
 	if (stat(ts_dev, &s) != 0) {
@@ -432,12 +680,38 @@ int main(int argc, char **argv)
 	}
     }
 
-    do_calibration();
+    i = 1 ;
+    ioctl( ts_fd, O_NONBLOCK, &i );
+
+    tty_fd = open("/dev/tty0", O_RDWR);
+
+    rv = ioctl( ts_fd, EVIOCGABS(ABS_X), &abs_x);
+    if (0 != rv) {
+        log_write("Error %m reading ABS_X\n");
+        return -1 ;
+    }
+    else
+        printf("x range is [0x%x..0x%x]\n", abs_x.minimum, abs_x.maximum);
+
+    rv = ioctl( ts_fd, EVIOCGABS(ABS_Y), &abs_y);
+    if (0 != rv) {
+        log_write("Error %m reading ABS_Y\n");
+        return -1 ;
+    }
+    else
+        printf("y range is [0x%x..0x%x]\n", abs_y.minimum, abs_y.maximum);
+again:
+    do_calibration(abs_x.minimum,abs_x.maximum,abs_y.minimum,abs_y.maximum);
 
     log_write("Calibration done!!\n");
 
-    //test_calibration();
+    if( !test_calibration(abs_x.minimum,abs_x.maximum,abs_y.minimum,abs_y.maximum) ) {
+	log_write ("Calibration settings not confirmed\n");
+	goto again ;
+    }
+    memset(scrbuf, 0, scrsize);
 
+    close(tty_fd);
     close(ts_fd);
 err_map:
     munmap(scrbuf, finfo.smem_len);
