@@ -47,7 +47,8 @@ static const char fb_dev[] = "/dev/graphics/fb0";
 static const char input_dev[] = "/dev/input/event";
 static const char cf_file[] = "/data/system/calibration";
 static const char log[] = "/ts.log";
-static const char dev_name[] = TS_INPUT_DEV;
+static const char default_dev_name[] = TS_INPUT_DEV;
+static char const *dev_name = default_dev_name ;
 static int log_fd;
 static struct fb_var_screeninfo info;
 static void *scrbuf;
@@ -74,20 +75,22 @@ static void write_conf(int *data)
     char param_path[256];
     char buf[200];
     int fd, len;
+    int num_written ;
 
     sprintf(param_path,
 	    "/sys/module/%s/parameters/calibration", dev_name);
     fd = open(param_path, O_WRONLY);
     if (fd < 0) {
-	log_write("write_conf() error, can not write driver parameters\n");
+	log_write("write_conf() error, can not write driver parameters to %s\n", param_path);
 	return;
     }
     len = sprintf(buf, "%d,%d,%d,%d,%d,%d,%d",
 			    data[0], data[1], data[2],
 			    data[3], data[4], data[5],
 			    data[6]);
-    log_write("write_conf(), write driver parameters:\n\t%s\n", buf);
-    write(fd, buf, len);
+    log_write("write_conf(), write driver parameters:\n%s\n", buf);
+    num_written = write(fd, buf, len);
+    log_write("write_conf(), wrote %d bytes\n");
     close(fd);
 }
 
@@ -101,7 +104,7 @@ static void no_conf(void)
 	    "/sys/module/%s/parameters/calibration", dev_name);
     fd = open(param_path, O_WRONLY);
     if (fd < 0) {
-	log_write("no_conf() error, can not write driver parameters\n");
+	log_write("no_conf() error, can not write driver parameters to %s\n", param_path);
 	return;
     }
     write(fd, buf, strlen(buf));
@@ -207,6 +210,8 @@ static void get_input(int *px, int *py)
 			    *px /= num_x ;
 			    *py /= num_y ;
 			    return;
+			} else if (num_x && num_y){
+				log_write ("%d:%d\n", *px/num_x, *py/num_y);
 			}
 			break;
 		    case EV_KEY:
@@ -216,7 +221,7 @@ static void get_input(int *px, int *py)
 			break;
 		    case EV_ABS:
 			if (ev[i].code == REL_X) {
-			    tty_write(1,2,"%4u",ev[i].value);
+			    tty_write(1,2,"%5u",ev[i].value);
 			    if (256 < num_x) {
 				    *px /= 2 ;
 				    num_x /= 2 ;
@@ -225,7 +230,7 @@ static void get_input(int *px, int *py)
 			    num_x++ ;
 			}
 			else if (ev[i].code == REL_Y) {
-			    tty_write(6,2,"%4u",ev[i].value);
+			    tty_write(1,3,"%5u",ev[i].value);
 			    if (256 < num_y) {
 				    *py /= 2 ;
 				    num_y /= 2 ;
@@ -328,14 +333,13 @@ static void do_calibration(int xmin, int xmax, int ymin, int ymax)
     points[2].x = (3 * info.xres) / 4;
     points[2].y = (3 * info.yres) / 4;
 
-    no_conf();
-
 retry:
+    no_conf();
     for (i = 0; i < 3; i ++) {
         struct calibrate_point_t *pt = points+i ;
 	flush_input(); /* in case we're bouncing */
 	draw_cross(pt->x, pt->y, WHITE);
-        tty_write(1,1,"%4u:%4u",pt->x,pt->y);
+        tty_write(1,1,"%5u:%5u",pt->x,pt->y);
 	get_input(&pt->i, &pt->j);
 	draw_cross(pt->x, pt->y, BLACK);
         points[i].x = (points[i].x*xrange)/info.xres ;
@@ -347,8 +351,7 @@ retry:
 		      , points[0].x, points[0].y, points[0].i, points[0].j
 		      , points[1].x, points[1].y, points[1].i, points[1].j
 		      , points[2].x, points[2].y, points[2].i, points[2].j
-		      , info.xres, info.yres );
-	    save_conf(cal_val);
+		      , xrange+1, yrange+1 );
 	    write_conf(cal_val);
     } else {
 	    log_write( "calibration failure\n" );
@@ -522,7 +525,7 @@ static int test_calibration(int xmin,int xmax,int ymin,int ymax)
 	int const test_right = test_left+button_size ;
 	int const test_top = confirm_top ;
 	int const test_bottom = confirm_bottom ;
-
+	int last_i = 0, last_j = 0 ;
 	tty_write(1,1,CLEARSCREEN NOCURSOR);
 	set_title("Touch green box to confirm");
 	set_title("Touch red box to run 64-point test");
@@ -539,15 +542,18 @@ static int test_calibration(int xmin,int xmax,int ymin,int ymax)
 			if (released) {
 				if (point_in_rect(last_x,last_y,confirm_left,confirm_top,confirm_right,confirm_bottom)) {
 					log_write ("Calibration settings confirmed @%u:%u\n", last_x, last_y);
+					save_conf(cal_val);
 					return 1 ;
 				} else if (point_in_rect(last_x,last_y,test_left,test_top,test_right,test_bottom)) {
 					test_64_points();
 					return 0 ;
 				} else {
 					draw_cross(last_x,last_y,0x0000FF);
+					log_write("Touch out of range [%u:%u]\n", last_x, last_y);
 				}
 			} else {
 				draw_cross(last_x,last_y,0x808080);
+				log_write( "%u:%u..%u:%u\n", last_i, last_j, last_x, last_y);
 			}
 		    case EV_KEY:
 			released = (ev[i].code == BTN_TOUCH && ev[i].value == 0);
@@ -555,12 +561,14 @@ static int test_calibration(int xmin,int xmax,int ymin,int ymax)
 			break;
 		    case EV_ABS:
 			if (ev[i].code == REL_X) {
-			    tty_write(1,2,"%4u",ev[i].value);
+			    tty_write(1,2,"%5u",ev[i].value);
 			    last_x = (ev[i].value*info.xres)/xrange ;
+			    last_i = ev[i].value ;
 			}
 			else if (ev[i].code == REL_Y) {
-			    tty_write(6,2,"%4u",ev[i].value);
+			    tty_write(1,3,"%5u",ev[i].value);
 			    last_y = (ev[i].value*info.yres)/yrange ;
+			    last_j = ev[i].value;
 			}
 			break;
 		    default:
@@ -604,6 +612,10 @@ static int check_conf(void)
     return 0;
 }
 
+static char const tsdevice_tag[] = {
+	"tsdev"
+};
+
 int main(int argc, char **argv)
 {
     struct input_absinfo abs_x ;
@@ -612,7 +624,7 @@ int main(int argc, char **argv)
     struct fb_fix_screeninfo finfo;
     struct stat s;
     int i, rv;
-
+    int attempts = 0 ;
     if (!isatty(0)) {
 	    char runme[PROPERTY_VALUE_MAX];
 	    property_get("ro.calibration", runme, "");
@@ -623,6 +635,39 @@ int main(int argc, char **argv)
     /* open log */
     log_fd = isatty(1) ? 1 : open(log, O_WRONLY | O_CREAT | O_TRUNC);
 
+    log_write("log opened\n");
+    if (1 < argc) {
+	    dev_name = argv[1];
+	    log_write("using device name <%s> from command-line\n", dev_name);
+    } else {
+	    int fdcmdline = open("/proc/cmdline", O_RDONLY);
+	    if (0 < fdcmdline) {
+		    char cmdline[2048];
+		    int numRead ;
+		    numRead = read(fdcmdline,cmdline,sizeof(cmdline)-1);
+		    if (0 < numRead) {
+			    char *s ;
+			    cmdline[numRead] = 0 ;
+			    if (0 != (s = strstr(cmdline,tsdevice_tag))) {
+				    s += sizeof(tsdevice_tag)-1 ;
+				    if ('=' == *s) {
+					    dev_name = strdup(++s);
+					    s = dev_name ;
+					    while (isalnum(*s) || !isspace(*s)) {
+						    s++ ;
+					    }
+					    *s = 0 ;
+					    log_write ("using device <%s> from kernel command line\n",dev_name);
+				    } else
+					    log_write ("calibration device not specified on cmdline\n");
+			    } else
+				    log_write ("calibration not specified on cmdline\n");
+		    } else
+			    log_write ("Error reading /proc/cmdline\n");
+		    close(fdcmdline);
+	    } else
+		log_write ("Error opening /proc/cmdline\n");
+    }
     if (check_conf())
 	goto err_log;
 
@@ -691,7 +736,7 @@ int main(int argc, char **argv)
         return -1 ;
     }
     else
-        printf("x range is [0x%x..0x%x]\n", abs_x.minimum, abs_x.maximum);
+        log_write ("x range is [0x%x..0x%x]\n", abs_x.minimum, abs_x.maximum);
 
     rv = ioctl( ts_fd, EVIOCGABS(ABS_Y), &abs_y);
     if (0 != rv) {
@@ -699,7 +744,7 @@ int main(int argc, char **argv)
         return -1 ;
     }
     else
-        printf("y range is [0x%x..0x%x]\n", abs_y.minimum, abs_y.maximum);
+        log_write ("y range is [0x%x..0x%x]\n", abs_y.minimum, abs_y.maximum);
 again:
     do_calibration(abs_x.minimum,abs_x.maximum,abs_y.minimum,abs_y.maximum);
 
@@ -707,7 +752,10 @@ again:
 
     if( !test_calibration(abs_x.minimum,abs_x.maximum,abs_y.minimum,abs_y.maximum) ) {
 	log_write ("Calibration settings not confirmed\n");
-	goto again ;
+	if (4 > ++attempts)
+		goto again ;
+	else
+		no_conf();
     }
     memset(scrbuf, 0, scrsize);
 
