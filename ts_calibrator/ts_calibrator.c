@@ -200,9 +200,10 @@ static void get_input(int *px, int *py)
 	struct input_event ev[64];
 	int num_read ;
 	/* read ts input */
-	if (0 < (num_read = read_input(-1,ev,ARRAY_SIZE(ev)))) {
+	if (0 < (num_read = read_input(10000,ev,ARRAY_SIZE(ev)))) {
 		int i ;
 		for (i = 0; i < num_read ; i++) {
+log_write("%s: %d.%d.%d\n", __func__, ev[i].type,ev[i].code,ev[i].value);
 		    switch (ev[i].type) {
 
 		    case EV_SYN:
@@ -243,6 +244,9 @@ static void get_input(int *px, int *py)
 			break;
 		    }
 		}
+	} else {
+		log_write ("idle waiting for touch screen\n");
+		exit(1);
 	}
     }
 }
