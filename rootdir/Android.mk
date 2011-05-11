@@ -6,7 +6,8 @@ include $(CLEAR_VARS)
 copy_from := \
 	etc/dbus.conf \
 	etc/init.gprs-pppd \
-	etc/hosts
+	etc/hosts \
+	etc/magd.conf
 
 ifeq ($(TARGET_PRODUCT),generic)
 copy_from += etc/vold.fstab
