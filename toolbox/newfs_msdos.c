@@ -318,7 +318,7 @@ newfs_msdos_main(int argc, char *argv[])
 	    opt_c = 0;
 	    break;
 	case 'c':
-	    opt_c = argto1(optarg, 1, "sectors/cluster");
+	    opt_c = 0; /*ignore this parameter*/
 	    opt_b = 0;
 	    break;
 	case 'e':
@@ -425,14 +425,16 @@ newfs_msdos_main(int argc, char *argv[])
 	    bpb.bsec -= delta;
 	}
 	if (bpb.spc == 0) {	/* set defaults */
-	    if (bpb.bsec <= 6000)	/* about 3MB -> 512 bytes */
+	    if (bpb.bsec <= (1<<17)) /* about 64MB -> 512 bytes */
 		bpb.spc = 1;
-	    else if (bpb.bsec <= (1<<17)) /* 64M -> 4k */
+	    else if (bpb.bsec <= (1<<19)) /* 256M -> 1k */
+		bpb.spc = 2;
+	    else if (bpb.bsec <= (1<<20)) /* 512M -> 4k */
 		bpb.spc = 8;
-	    else if (bpb.bsec <= (1<<19)) /* 256M -> 8k */
+	    else if (bpb.bsec <= (1<<21)) /* 1G -> 8k */
 		bpb.spc = 16;
-	    else if (bpb.bsec <= (1<<21)) /* 1G -> 16k */
-		bpb.spc = 32;
+            else if (bpb.bsec <= (1<<22)) /* 2G -> 16k */
+                bpb.spc = 32;
 	    else
 		bpb.spc = 64;		/* otherwise 32k */
 	}
@@ -530,6 +532,13 @@ newfs_msdos_main(int argc, char *argv[])
 	else
 	    fat = 32;
     }
+
+    /*To be compatible with windows*/
+    if (((bpb.bsec / bpb.spc) < 65527) && ((bpb.bsec / bpb.spc) > MINCLS16))
+        fat = 16;
+    else if ((bpb.bsec / bpb.spc) < MINCLS16)
+        fat = 12;
+        
     x = bss;
     if (fat == 32) {
 	if (!bpb.infs) {
