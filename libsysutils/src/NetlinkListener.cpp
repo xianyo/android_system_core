@@ -23,11 +23,19 @@
 #define LOG_TAG "NetlinkListener"
 #include <cutils/log.h>
 
-#include <sysutils/NetlinkListener.h>
 #include <sysutils/NetlinkEvent.h>
 
+/* temporary version until we can get Motorola to update their
+ * ril.so.  Their prebuilt ril.so is using this private class
+ * so changing the NetlinkListener() constructor breaks their ril.
+ */
 NetlinkListener::NetlinkListener(int socket) :
                             SocketListener(socket, false) {
+    mFormat = NETLINK_FORMAT_ASCII;
+}
+
+NetlinkListener::NetlinkListener(int socket, int format) :
+                            SocketListener(socket, false), mFormat(format) {
 }
 
 bool NetlinkListener::onDataAvailable(SocketClient *cli)
@@ -63,7 +71,7 @@ bool NetlinkListener::onDataAvailable(SocketClient *cli)
     }
 
     NetlinkEvent *evt = new NetlinkEvent();
-    if (!evt->decode(mBuffer, count)) {
+    if (!evt->decode(mBuffer, count, mFormat)) {
         SLOGE("Error decoding NetlinkEvent");
         goto out;
     }

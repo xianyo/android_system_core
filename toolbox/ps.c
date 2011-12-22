@@ -39,6 +39,7 @@ static int ps_line(int pid, int tid, char *namefilter)
     int fd, r;
     char *ptr, *name, *state;
     int ppid, tty;
+    int pgrp,sid;
     unsigned wchan, rss, vss, eip;
     unsigned utime, stime;
     int prio, nice, rtprio, sched;
@@ -82,8 +83,8 @@ static int ps_line(int pid, int tid, char *namefilter)
     ptr++;          // skip " "
     state = nexttok(&ptr);
     ppid = atoi(nexttok(&ptr));
-    nexttok(&ptr); // pgrp
-    nexttok(&ptr); // sid
+    pgrp = atoi(nexttok(&ptr)); // pgrp
+    sid = atoi(nexttok(&ptr)); // sid
     tty = atoi(nexttok(&ptr));
     
     nexttok(&ptr); // tpgid
@@ -141,7 +142,7 @@ static int ps_line(int pid, int tid, char *namefilter)
     }
     
     if(!namefilter || !strncmp(name, namefilter, strlen(namefilter))) {
-        printf("%-9s %-5d %-5d %-6d %-5d", user, pid, ppid, vss / 1024, rss * 4);
+        printf("%-9s %-5d %-5d %-5d %-5d %-6d %-5d", user, pid, ppid, pgrp, sid, vss / 1024, rss * 4);
         if(display_flags&SHOW_PRIO)
             printf(" %-5d %-5d %-5d %-5d", prio, nice, rtprio, sched);
         if (display_flags & SHOW_POLICY) {
@@ -216,7 +217,7 @@ int ps_main(int argc, char **argv)
         argv++;
     }
 
-    printf("USER     PID   PPID  VSIZE  RSS   %s %s WCHAN    PC         NAME\n", 
+    printf("USER     PID   PPID  PGRP  SID  VSIZE  RSS   %s %s WCHAN    PC         NAME\n", 
            (display_flags&SHOW_PRIO)?"PRIO  NICE  RTPRI SCHED ":"",
            (display_flags&SHOW_POLICY)?"PCY " : "");
     while((de = readdir(d)) != 0){
