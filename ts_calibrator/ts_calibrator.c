@@ -47,8 +47,8 @@ static const char fb_dev[] = "/dev/graphics/fb0";
 static const char input_dev[] = "/dev/input/event";
 static const char cf_file[] = "/data/system/calibration";
 static const char log[] = "/data/ts.log";
-static const char default_dev_name[] = TS_INPUT_DEV;
-static char const *dev_name = default_dev_name ;
+static char default_dev_name[] = TS_INPUT_DEV;
+static char *dev_name = default_dev_name ;
 static int log_fd;
 static struct fb_var_screeninfo info;
 static void *scrbuf;
@@ -637,7 +637,7 @@ int main(int argc, char **argv)
     }
 
     /* open log */
-    log_fd = isatty(1) ? 1 : open(log, O_WRONLY | O_CREAT | O_TRUNC);
+    log_fd = isatty(1) ? 1 : open(log, O_WRONLY | O_CREAT | O_TRUNC,0666);
 
     log_write("log opened\n");
     if (1 < argc) {
