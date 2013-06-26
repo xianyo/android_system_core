@@ -462,7 +462,6 @@ exit_success:
 static void kernel_cmdline_to_env(char *name, int in_qemu)
 {
 	char *sep = strchr(name, '=');
-	ERROR("%s: %s\n", __func__, name);
 	if (sep) {
 		*sep = 0;
 		setenv(name,sep+1,0);
