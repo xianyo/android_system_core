@@ -457,6 +457,16 @@ exit_success:
 
 }
 
+static void kernel_cmdline_to_env(char *name, int in_qemu)
+{
+	char *sep = strchr(name, '=');
+	ERROR("%s: %s\n", __func__, name);
+	if (sep) {
+		*sep = 0;
+		setenv(name,sep+1,0);
+	}
+}
+
 int do_mount_all(int nargs, char **args)
 {
     pid_t pid;
@@ -487,6 +497,9 @@ int do_mount_all(int nargs, char **args)
         }
     } else if (pid == 0) {
         /* child, call fs_mgr_mount_all() */
+
+        import_kernel_cmdline(0, kernel_cmdline_to_env);
+
         klog_set_level(6);  /* So we can see what fs_mgr_mount_all() does */
         fstab = fs_mgr_read_fstab(args[1]);
         child_ret = fs_mgr_mount_all(fstab);

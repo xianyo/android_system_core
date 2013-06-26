@@ -272,6 +272,55 @@ static char *fs_getline(char *buf, int size, FILE *file)
     }
 }
 
+static char const boot_device_preamble[] = {
+	"/dev/block/platform/"
+};
+
+static char const boot_device_trailer[] = {
+	"/by-num/p"
+};
+
+static char const *boot_device_base=0;
+static unsigned boot_device_base_len=0;
+static char const boot_device_default[] = {
+        "sdhci-esdhc-imx.2"
+};
+
+static char const *get_boot_device_base(void){
+	if (0 == boot_device_base) {
+		boot_device_base = getenv("androidboot.bootdev");
+		if (!boot_device_base)
+			boot_device_base = boot_device_default;
+		boot_device_base_len = strlen(boot_device_base);
+		INFO("boot device base == %s\n", __func__, boot_device_base);
+	}
+	return boot_device_base;
+}
+
+static char *get_boot_device(char const *fstab_entry)
+{
+	if(!strncmp("$BD",fstab_entry,3)){
+		char const *bootdev = get_boot_device_base();
+		unsigned len=sizeof(boot_device_preamble)
+				+ boot_device_base_len
+				+ strlen(fstab_entry+3)
+				+ sizeof(boot_device_trailer)
+				+ 1;
+		char *rval = malloc(len);
+		char *nextout = rval;
+		memcpy(rval,boot_device_preamble,sizeof(boot_device_preamble)-1);
+		nextout = rval+sizeof(boot_device_preamble)-1;
+		memcpy(nextout,boot_device_base,boot_device_base_len);
+		nextout += boot_device_base_len;
+		memcpy(nextout,boot_device_trailer,sizeof(boot_device_trailer)-1);
+		nextout += sizeof(boot_device_trailer)-1;
+		strcpy(nextout,fstab_entry+3);
+		return rval;
+	} else {
+		return strdup(fstab_entry);
+	}
+}
+
 struct fstab *fs_mgr_read_fstab(const char *fstab_path)
 {
     FILE *fstab_file;
@@ -356,7 +405,7 @@ struct fstab *fs_mgr_read_fstab(const char *fstab_path)
             ERROR("Error parsing mount source\n");
             return 0;
         }
-        fstab->recs[cnt].blk_device = strdup(p);
+        fstab->recs[cnt].blk_device = get_boot_device(p);
 
         if (!(p = strtok_r(NULL, delim, &save_ptr))) {
             ERROR("Error parsing mount_point\n");
