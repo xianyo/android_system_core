@@ -230,7 +230,8 @@ enum {
      * Boolean that indicates whether the consumer is running more than
      * one buffer behind the producer.
      */
-    NATIVE_WINDOW_CONSUMER_RUNNING_BEHIND = 9
+    NATIVE_WINDOW_CONSUMER_RUNNING_BEHIND = 9,
+    NATIVE_WINDOW_GET_FRAME_LOST = 100
 };
 
 /* Valid operations for the (*perform)() hook.
