@@ -207,13 +207,17 @@ log_write("%s: %d.%d.%d\n", __func__, ev[i].type,ev[i].code,ev[i].value);
 		    switch (ev[i].type) {
 
 		    case EV_SYN:
-			if (step) {
+			if (ev[i].code == SYN_MT_REPORT) {
+			    step = (0 < num_x) && (0 < num_y);
+			    log_write("step == %d/%d/%d\n", step, num_x, num_y);
+			} else if (step) {
 			    *px /= num_x ;
 			    *py /= num_y ;
 			    return;
 			} else if (num_x && num_y){
 				log_write ("%d:%d\n", *px/num_x, *py/num_y);
-			}
+			} else
+				log_write ("SYN no step: %d/%d/%d\n",step, num_x, num_y);
 			break;
 		    case EV_KEY:
 			if (ev[i].code == BTN_TOUCH && ev[i].value == 0 && (0 < num_x) && (0 < num_y))
@@ -221,7 +225,9 @@ log_write("%s: %d.%d.%d\n", __func__, ev[i].type,ev[i].code,ev[i].value);
 			    step = 1;
 			break;
 		    case EV_ABS:
-			if (ev[i].code == REL_X) {
+			if ((ev[i].code == REL_X)
+			    ||
+			    (ev[i].code == ABS_MT_POSITION_X)){
 			    tty_write(1,2,"%5u",ev[i].value);
 			    if (256 < num_x) {
 				    *px /= 2 ;
@@ -230,7 +236,9 @@ log_write("%s: %d.%d.%d\n", __func__, ev[i].type,ev[i].code,ev[i].value);
 			    *px += ev[i].value;
 			    num_x++ ;
 			}
-			else if (ev[i].code == REL_Y) {
+			else if ((ev[i].code == REL_Y)
+				 ||
+				 (ev[i].code == ABS_MT_POSITION_Y)) {
 			    tty_write(1,3,"%5u",ev[i].value);
 			    if (256 < num_y) {
 				    *py /= 2 ;
