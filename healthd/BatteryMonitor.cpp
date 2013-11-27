@@ -14,6 +14,10 @@
  * limitations under the License.
  */
 
+/*
+ * Copyright (C) 2013 Freescale Semiconductor, Inc.
+ */
+
 #define LOG_TAG "healthd"
 
 #include "healthd.h"
@@ -28,6 +32,7 @@
 #include <unistd.h>
 #include <batteryservice/BatteryService.h>
 #include <cutils/klog.h>
+#include <cutils/properties.h>
 #include <utils/String8.h>
 #include <utils/Vector.h>
 
@@ -263,6 +268,15 @@ bool BatteryMonitor::update(void) {
                   props.chargerAcOnline ? "a" : "",
                   props.chargerUsbOnline ? "u" : "",
                   props.chargerWirelessOnline ? "w" : "");
+    }
+
+    char prop[PROP_VALUE_MAX];
+    // always report AC plug-in and capacity 100% if emulated.battery is set to 1
+    property_get("sys.emulated.battery", prop, "0");
+    if (!strcmp(prop, "1")){
+        props.chargerAcOnline = true;
+        props.batteryLevel = 100;
+        props.chargerWirelessOnline = false;
     }
 
     if (mBatteryPropertiesRegistrar != NULL)
