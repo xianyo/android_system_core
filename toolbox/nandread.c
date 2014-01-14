@@ -44,7 +44,7 @@ int nandread_main(int argc, char **argv)
     struct mtd_info_user mtdinfo;
     struct mtd_ecc_stats initial_ecc, last_ecc, ecc;
     struct mtd_oob_buf oobbuf;
-    struct nand_ecclayout ecclayout;
+    struct nand_ecclayout_user ecclayout;
 
     do {
         c = getopt(argc, argv, "d:f:s:S:L:Rhv");
@@ -177,7 +177,7 @@ int nandread_main(int argc, char **argv)
 
     if (rawmode) {
         rawmode = mtdinfo.oobsize;
-        ret = ioctl(fd, MTDFILEMODE, MTD_MODE_RAW);
+        ret = ioctl(fd, MTDFILEMODE, MTD_FILE_MODE_RAW);
         if (ret) {
             fprintf(stderr, "failed set raw mode for %s, %s\n",
                     devname, strerror(errno));
