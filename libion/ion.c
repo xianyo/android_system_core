@@ -28,7 +28,7 @@
 #include <sys/mman.h>
 #include <sys/types.h>
 
-#include <linux/ion.h>
+#include <linux/mxc_ion.h>
 #include <ion/ion.h>
 
 int ion_open()
@@ -55,13 +55,14 @@ static int ion_ioctl(int fd, int req, void *arg)
         return ret;
 }
 
-int ion_alloc(int fd, size_t len, size_t align, unsigned int flags,
-              ion_user_handle_t **handle)
+int ion_alloc(int fd, size_t len, size_t align, unsigned int heap_mask,
+              unsigned int flags, ion_user_handle_t *handle)
 {
         int ret;
         struct ion_allocation_data data = {
                 .len = len,
                 .align = align,
+                .heap_id_mask  = heap_mask,
                 .flags = flags,
         };
 
@@ -72,7 +73,7 @@ int ion_alloc(int fd, size_t len, size_t align, unsigned int flags,
         return ret;
 }
 
-int ion_free(int fd,  ion_user_handle_t *handle)
+int ion_free(int fd, ion_user_handle_t handle)
 {
         struct ion_handle_data data = {
                 .handle = handle,
@@ -80,7 +81,7 @@ int ion_free(int fd,  ion_user_handle_t *handle)
         return ion_ioctl(fd, ION_IOC_FREE, &data);
 }
 
-int ion_map(int fd,  ion_user_handle_t *handle, size_t length, int prot,
+int ion_map(int fd,  ion_user_handle_t handle, size_t length, int prot,
             int flags, off_t offset, unsigned char **ptr, int *map_fd)
 {
         struct ion_fd_data data = {
@@ -103,23 +104,34 @@ int ion_map(int fd,  ion_user_handle_t *handle, size_t length, int prot,
         return ret;
 }
 
-unsigned long ion_phys(int fd, ion_user_handle_t *handle)
+static int ion_custom(int fd, void *arg)
 {
-#if 0
+	int ret;
+	ret = ion_ioctl(fd, ION_IOC_CUSTOM, arg);
+	return ret;
+}
+
+unsigned long ion_phys(int fd, ion_user_handle_t handle)
+{
         int ret;
         struct ion_phys_data data = {
                 .handle = handle,
 		.phys = 0,
         };
 
-        ret = ion_ioctl(fd, ION_IOC_PHYS, &data);
+	struct ion_custom_data custom = {
+		.cmd = ION_IOC_PHYS,
+		.arg = (int)&data,
+	};
+
+        ret = ion_custom(fd, &custom);
         if (ret == 0)
             return data.phys;
-#endif
+
         return 0;
 }
 
-int ion_share(int fd,  ion_user_handle_t *handle, int *share_fd)
+int ion_share(int fd,  ion_user_handle_t handle, int *share_fd)
 {
         int map_fd;
         struct ion_fd_data data = {
@@ -137,7 +149,7 @@ int ion_share(int fd,  ion_user_handle_t *handle, int *share_fd)
         return ret;
 }
 
-int ion_import(int fd, int share_fd, ion_user_handle_t **handle)
+int ion_import(int fd, int share_fd, ion_user_handle_t *handle)
 {
         struct ion_fd_data data = {
                 .fd = share_fd,
@@ -147,5 +159,18 @@ int ion_import(int fd, int share_fd, ion_user_handle_t **handle)
         if (ret < 0)
                 return ret;
         *handle = data.handle;
+        return ret;
+}
+
+int ion_alloc_fd(int fd, size_t len, size_t align, unsigned int heap_mask,
+                 unsigned int flags, int *handle_fd) {
+        ion_user_handle_t handle;
+        int ret;
+
+        ret = ion_alloc(fd, len, align, heap_mask, flags, &handle);
+        if (ret < 0)
+                return ret;
+        ret = ion_share(fd, handle, handle_fd);
+        ion_free(fd, handle);
         return ret;
 }

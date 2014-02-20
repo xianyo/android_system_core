@@ -13,17 +13,17 @@
 
 #include <ion/ion.h>
 #include <linux/ion.h>
-#include <linux/omap_ion.h>
 
 size_t len = 1024*1024, align = 0;
 int prot = PROT_READ | PROT_WRITE;
 int map_flags = MAP_SHARED;
+unsigned int heap_id = 0;
 int alloc_flags = 0;
 int test = -1;
 size_t width = 1024*1024, height = 1024*1024;
 size_t stride;
 
-int _ion_alloc_test(int *fd, ion_user_handle_t **handle)
+int _ion_alloc_test(int *fd, ion_user_handle_t *handle)
 {
 	int ret;
 
@@ -31,7 +31,7 @@ int _ion_alloc_test(int *fd, ion_user_handle_t **handle)
 	if (*fd < 0)
 		return *fd;
 
-	ret = ion_alloc(*fd, len, align, alloc_flags, handle);
+	ret = ion_alloc(*fd, len, align, heap_id, alloc_flags, handle);
 
 	if (ret)
 		printf("%s failed: %s\n", __func__, strerror(ret));
@@ -41,14 +41,14 @@ int _ion_alloc_test(int *fd, ion_user_handle_t **handle)
 void ion_alloc_test()
 {
 	int fd, ret;
-	ion_user_handle_t *handle;
+	ion_user_handle_t handle;
 
 	if(_ion_alloc_test(&fd, &handle))
 			return;
 
 	ret = ion_free(fd, handle);
 	if (ret) {
-		printf("%s failed: %s %p\n", __func__, strerror(ret), handle);
+		printf("%s failed: %s %d\n", __func__, strerror(ret), handle);
 		return;
 	}
 	ion_close(fd);
@@ -59,7 +59,7 @@ void ion_map_test()
 {
 	int fd, map_fd, ret;
 	size_t i;
-	ion_user_handle_t *handle;
+	ion_user_handle_t handle;
 	unsigned char *ptr;
 
 	if(_ion_alloc_test(&fd, &handle))
@@ -100,7 +100,7 @@ void ion_map_test()
 void ion_share_test()
 
 {
-	ion_user_handle_t *handle;
+	ion_user_handle_t handle;
 	int sd[2];
 	int num_fd = 1;
 	struct iovec count_vec = {
