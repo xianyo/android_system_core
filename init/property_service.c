@@ -72,6 +72,7 @@ struct {
     { "gsm.",             AID_RADIO,    0 },
     { "persist.radio",    AID_RADIO,    0 },
     { "net.dns",          AID_RADIO,    0 },
+    { "net.dnsmasq.",     AID_NOBODY,   0 },
     { "sys.usb.config",   AID_RADIO,    0 },
     { "net.",             AID_SYSTEM,   0 },
     { "dev.",             AID_SYSTEM,   0 },
