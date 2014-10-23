@@ -317,7 +317,7 @@ static char const *get_boot_device_base(void){
 		if (!boot_device_base)
 			boot_device_base = boot_device_default;
 		boot_device_base_len = strlen(boot_device_base);
-		INFO("boot device base == %s\n", __func__, boot_device_base);
+		INFO("boot device base == %s\n", boot_device_base);
 	}
 	return boot_device_base;
 }
