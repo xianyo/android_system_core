@@ -298,17 +298,17 @@ static char *fs_getline(char *buf, int size, FILE *file)
 }
 
 static char const boot_device_preamble[] = {
-	"/dev/block/platform/"
+	"/dev/block/"
 };
 
 static char const boot_device_trailer[] = {
-	"/by-num/p"
+	"p"
 };
 
 static char const *boot_device_base=0;
 static unsigned boot_device_base_len=0;
 static char const boot_device_default[] = {
-        "sdhci-esdhc-imx.2"
+        "mmcblk3"
 };
 
 static char const *get_boot_device_base(void){
@@ -337,8 +337,10 @@ static char *get_boot_device(char const *fstab_entry)
 		nextout = rval+sizeof(boot_device_preamble)-1;
 		memcpy(nextout,boot_device_base,boot_device_base_len);
 		nextout += boot_device_base_len;
-		memcpy(nextout,boot_device_trailer,sizeof(boot_device_trailer)-1);
-		nextout += sizeof(boot_device_trailer)-1;
+		if (0 != strstr(bootdev,"mmc")) {
+			memcpy(nextout,boot_device_trailer,sizeof(boot_device_trailer)-1);
+			nextout += sizeof(boot_device_trailer)-1;
+		}
 		strcpy(nextout,fstab_entry+3);
 		return rval;
 	} else {
