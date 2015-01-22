@@ -12,7 +12,9 @@ LOCAL_STATIC_LIBRARIES := liblogwrap libmincrypt libext4_utils_static
 LOCAL_C_INCLUDES += system/extras/ext4_utils
 LOCAL_EXPORT_C_INCLUDE_DIRS := $(LOCAL_PATH)/include
 LOCAL_CFLAGS := -Werror
-
+ifeq ($(DM_VERITY_RUNTIME_CONFIG),true)
+LOCAL_CFLAGS += -DDM_VERITY_DYNAMIC
+endif
 include $(BUILD_STATIC_LIBRARY)
 
 
@@ -33,6 +35,8 @@ LOCAL_UNSTRIPPED_PATH := $(TARGET_ROOT_OUT_UNSTRIPPED)
 LOCAL_STATIC_LIBRARIES := libfs_mgr liblogwrap libcutils liblog libc libmincrypt libext4_utils_static
 
 LOCAL_CFLAGS := -Werror
-
+ifeq ($(DM_VERITY_RUNTIME_CONFIG),true)
+LOCAL_CFLAGS += -DDM_VERITY_DYNAMIC
+endif
 include $(BUILD_EXECUTABLE)
 
