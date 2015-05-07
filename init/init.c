@@ -716,6 +716,21 @@ static void import_kernel_nv(char *name, int for_emulator)
     }
 }
 
+static void kernel_cmdline_to_env(char *name, int in_qemu)
+{
+    /* only add variable that are android-specific */
+    if (!strncmp(name, "androidboot.", 12)) {
+        char *sep = strchr(name, '=');
+        ERROR("%s: %s\n", __func__, name);
+        if (sep) {
+            *sep = 0;
+            setenv(name,sep+1,0);
+            /* add it to ENV array for forked processes */
+            add_environment(name, sep+1);
+        }
+    }
+}
+
 static void export_kernel_boot_props(void)
 {
     char tmp[PROP_VALUE_MAX];
@@ -779,6 +794,11 @@ static void process_kernel_cmdline(void)
     import_kernel_cmdline(0, import_kernel_nv);
     if (qemu[0])
         import_kernel_cmdline(1, import_kernel_nv);
+
+    /* propagate androidboot variables as standard POSIX env variables
+     * for processes that can't access Android properties
+     */
+    import_kernel_cmdline(0, kernel_cmdline_to_env);
 
     /* now propogate the info given on command line to internal variables
      * used by init as well as the current required properties
