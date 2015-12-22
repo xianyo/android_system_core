@@ -10,7 +10,7 @@ on post-fs-data
     chmod 0660 /sys/class/android_usb/android0/f_rndis/ethaddr
 
 on boot
-    setprop sys.usb.configfs 0
+    setprop sys.usb.configfs 1
 
 # Used to disable USB when switching states
 on property:sys.usb.config=none && property:sys.usb.configfs=0
